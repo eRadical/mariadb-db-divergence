@@ -1,0 +1,12 @@
+---
+source:
+  host: localhost
+  user: root
+  password:
+  database: source_of_truth
+
+destination:
+  host: localhost
+  user: root
+  password:
+  database: destination_db
