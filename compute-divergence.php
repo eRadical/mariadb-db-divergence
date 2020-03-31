@@ -31,22 +31,27 @@ const INFORMATION_SCHEMA_COLUMNS = [
     'COLUMN_COMMENT'
     ];
 
-global $srcConnection;
-global $dstConnection;
+$srcConnection       = null;
+$dstConnection       = null;
 
-computeDivergence();
+$sourceDatabase      = null;
+$destinationDatabase = null;
+
+computeDivergence($argv[1]);
 function computeDivergence(string $configFile = 'compute-divergence.yaml'): void {
-    global $srcConnection, $dstConnection;
+    global $srcConnection, $dstConnection, $sourceDatabase, $destinationDatabase;
 
     $f = yaml_parse_file($configFile);
 
-    $srcConnection = new PDO('mysql:host=' . $f['source']['host'] . ';dbname=' . $f['source']['database'], $f['source']['user'], $f['source']['password'], [
+    $sourceDatabase = $f['source']['database'];
+    $srcConnection = new PDO('mysql:host=' . $f['source']['host'] . ';dbname=' . $sourceDatabase, $f['source']['user'], $f['source']['password'], [
         PDO::MYSQL_ATTR_INIT_COMMAND => 'SET NAMES utf8',
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
     ]);
 
-    $dstConnection = new PDO('mysql:host=' . $f['destination']['host'] . ';dbname=' . $f['destination']['database'], $f['destination']['user'], $f['destination']['password'], [
+    $destinationDatabase = $f['destination']['database'];
+    $dstConnection = new PDO('mysql:host=' . $f['destination']['host'] . ';dbname=' . $destinationDatabase, $f['destination']['user'], $f['destination']['password'], [
         PDO::MYSQL_ATTR_INIT_COMMAND => 'SET NAMES utf8',
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
@@ -57,7 +62,7 @@ function computeDivergence(string $configFile = 'compute-divergence.yaml'): void
 }
 
 function compareDatabases(): void {
-    global $srcConnection, $dstConnection;
+    global $srcConnection, $dstConnection, $sourceDatabase, $destinationDatabase;
 
     $sql = 'SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = DATABASE()';
 
@@ -65,15 +70,15 @@ function compareDatabases(): void {
     $dstDb = $dstConnection->query($sql)->fetch();
 
     if ($srcDb['DEFAULT_CHARACTER_SET_NAME'] != $dstDb['DEFAULT_CHARACTER_SET_NAME']) {
-        printf("DB ::: DIFF: DEFAULT_CHARACTER_SET_NAME SRC: %s DST: %s\n", $srcDb['DEFAULT_CHARACTER_SET_NAME'], $dstDb['DEFAULT_CHARACTER_SET_NAME']);
+        printf("DB: %s/%s ::: DIFF: DEFAULT_CHARACTER_SET_NAME %s/%s\n", $sourceDatabase, $destinationDatabase, $srcDb['DEFAULT_CHARACTER_SET_NAME'], $dstDb['DEFAULT_CHARACTER_SET_NAME']);
     }
     if ($srcDb['DEFAULT_COLLATION_NAME'] != $dstDb['DEFAULT_COLLATION_NAME']) {
-        printf("DB ::: DIFF: DEFAULT_COLLATION_NAME SRC: %s DST: %s\n", $srcDb['DEFAULT_COLLATION_NAME'], $dstDb['DEFAULT_COLLATION_NAME']);
+        printf("DB: %s/%s ::: DIFF: DEFAULT_COLLATION_NAME %s/%s\n", $sourceDatabase, $destinationDatabase, $srcDb['DEFAULT_COLLATION_NAME'], $dstDb['DEFAULT_COLLATION_NAME']);
     }
 }
 
 function compareTables() {
-    global $srcConnection, $dstConnection;
+    global $srcConnection, $dstConnection, $sourceDatabase, $destinationDatabase;
 
     $cols = implode(", ", INFORMATION_SCHEMA_TABLE);
     $sql = "SELECT TABLE_NAME, $cols FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()	AND TABLE_TYPE = 'BASE TABLE'";
@@ -88,10 +93,10 @@ function compareTables() {
     $missingTables = array_diff($akSrcTables, $akDstTables);
 
     if (count($missingTables) > 0) {
-        printf("TABLES_MISSING ::: %s\n", implode(", ", $missingTables));
+        printf("DB: %s/%s ::: TABLES_MISSING ::: %s\n", $sourceDatabase, $destinationDatabase, implode(", ", $missingTables));
     }
     if (count($extraTables) > 0) {
-        printf("TABLES_EXTRA ::: %s\n", implode(", ", $extraTables));
+        printf("DB: %s/%s ::: TABLES_EXTRA ::: %s\n", $sourceDatabase, $destinationDatabase, implode(", ", $extraTables));
     }
 
     $commonTables = array_intersect($akSrcTables, $akDstTables);
@@ -112,16 +117,17 @@ function reorganizeByTable(array $resultSet): array {
 }
 
 function compareOneTable(string $table, array $srcInfo, array $dstInfo): void {
+    global $sourceDatabase, $destinationDatabase;
     foreach (INFORMATION_SCHEMA_TABLE as $i) {
         if ($srcInfo[$i] != $dstInfo[$i]) {
-            printf("TABLE ::: %s ::: DIFF: %s SRC: %s DST: %s  \n", $table, $i, $srcInfo[$i], $dstInfo[$i]);
+            printf("DB: %s/%s ::: TABLE: %s ::: DIFF: %s: %s/%s  \n", $sourceDatabase, $destinationDatabase, $table, $i, $srcInfo[$i], $dstInfo[$i]);
         }
     }
     compareColumns($table);
 }
 
 function compareColumns(string $table) {
-    global $srcConnection, $dstConnection;
+    global $srcConnection, $dstConnection, $sourceDatabase, $destinationDatabase;
 
     $cols = implode(', ', INFORMATION_SCHEMA_COLUMNS);
     $sql = "SELECT COLUMN_NAME, $cols FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?";
@@ -141,10 +147,10 @@ function compareColumns(string $table) {
     $missingCols = array_diff($akSrcCols, $akDstCols);
 
     if (count($missingCols) > 0) {
-        printf("TABLE ::: %s ::: COLUMNS_MISSING ::: %s\n", $table, implode(", ", $missingCols));
+        printf("DB: %s/%s ::: TABLE: %s ::: COLUMNS_MISSING: %s\n", $sourceDatabase, $destinationDatabase, $table, implode(", ", $missingCols));
     }
     if (count($extraCols) > 0) {
-        printf("TABLE ::: %s ::: COLUMNS_EXTRA ::: %s\n", $table, implode(", ", $extraCols));
+        printf("DB: %s/%s ::: TABLE: %s ::: COLUMNS_EXTRA: %s\n", $sourceDatabase, $destinationDatabase, $table, implode(", ", $extraCols));
     }
 
     $commonCols = array_intersect($akSrcCols, $akDstCols);
@@ -166,9 +172,11 @@ function reorganizeByCol(array $resultSet): array {
 }
 
 function compareOneColumn($table, $column, $srcInfo, $dstInfo) {
+    global $sourceDatabase, $destinationDatabase;
+
     foreach (INFORMATION_SCHEMA_COLUMNS as $i) {
         if ($srcInfo[$i] != $dstInfo[$i]) {
-            printf("TABLE ::: %s ::: COLUMN ::: %s ::: DIFF: %s SRC: %s DST: %s  \n", $table, $column, $i, $srcInfo[$i], $dstInfo[$i]);
+            printf("DB: %s/%s ::: TABLE: %s ::: COLUMN: %s ::: DIFF: %s: %s/%s  \n", $sourceDatabase, $destinationDatabase, $table, $column, $i, $srcInfo[$i], $dstInfo[$i]);
         }
     }
 }
